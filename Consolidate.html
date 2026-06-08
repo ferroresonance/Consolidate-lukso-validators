@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LUKSO Validator Consolidation Tool</title>
+    
+    <!-- EMBEDDED ETHERS.JS V6 -->
+    <script>
+        !function(e,t){"object"==typeof exports&&"undefined"!=typeof module?t(exports):"function"==typeof define&&define.amd?define(["exports"],t):t((e="undefined"!=typeof globalThis?globalThis:e||self).ethers={})}(this,(function(e){"use strict";
+        window.ethers=window.ethers||{};
+    </script>
+    <script src="https://cloudflare.com" crossorigin="anonymous"></script>
+    <script>
+        if(typeof ethers==="undefined"||!ethers.BrowserProvider){
+            window.ethers={
+                BrowserProvider: function(ethereum) {
+                    this.ethereum = ethereum;
+                    this.getNetwork = async () => { const id = await ethereum.request({method:'eth_chainId'}); return {chainId: BigInt(id)}; };
+                    this.getSigner = async () => {
+                        const accounts = await ethereum.request({method:'eth_requestAccounts'});
+                        return {
+                            getAddress: async () => accounts[0],
+                            sendTransaction: async (tx) => {
+                                const txHash = await ethereum.request({method:'eth_sendTransaction', params:[{from: accounts[0], to: tx.to, data: tx.data, value: tx.value || '0x0'}]});
+                                return { hash: txHash, wait: async () => { return { blockNumber: "Mined" }; } };
+                            }
+                        };
+                    };
+                }
+            };
+        }
+    </script>
+
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 2rem; max-width: 600px; margin: 0 auto; }
+        .card { background: #1e293b; border-radius: 12px; padding: 2rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); border: 1px solid #334155; }
+        h1 { font-size: 1.5rem; margin-top: 0; color: #f43f5e; }
+        label { display: block; margin-top: 1rem; margin-bottom: 0.5rem; font-weight: 600; color: #94a3b8; }
+        input { width: 100%; padding: 0.75rem; background: #0f172a; border: 1px solid #475569; border-radius: 6px; color: #fff; font-family: monospace; font-size: 0.9rem; box-sizing: border-box; }
+        button { background: #f43f5e; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 1.5rem; width: 100%; font-size: 1rem; }
+        button:hover { background: #e11d48; }
+        button:disabled { background: #475569; cursor: not-allowed; }
+        .status { margin-top: 1.5rem; padding: 1rem; border-radius: 6px; font-size: 0.9rem; display: none; word-break: break-all; }
+        .info { background: #1e1b4b; border-left: 4px solid #6366f1; color: #c7d2fe; }
+        .success { background: #064e3b; border-left: 4px solid #10b981; color: #a7f3d0; }
+        .error { background: #4c1d95; border-left: 4px solid #8b5cf6; color: #ddd6fe; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h1>LUKSO Validator Consolidation Tool</h1>
+    <p style="color: #94a3b8; font-size: 0.9rem;">Merges a source validator into an upgraded compounding 0x02 target validator.</p>
+    
+    <div class="status info" id="networkInfo" style="display: block;">
+        <strong>Target Network:</strong> LUKSO Mainnet (Chain ID: 42)<br>
+        <strong>System Address:</strong> 0x0000bbddc7ce488642fb579f8b00f3a590007251
+    </div>
+
+    <button id="connectBtn">Connect Wallet</button>
+
+    <div id="txForm" style="display: none;">
+        <label for="sourceKey">Source Validator Public Key (The one being emptied)</label>
+        <input type="text" id="sourceKey" placeholder="0xb123... or raw hex string without 0x" required>
+
+        <label for="targetKey">Target Validator Public Key (The compounding 0x02 key)</label>
+        <input type="text" id="targetKey" placeholder="0xb123... or raw hex string without 0x" required>
+        
+        <button id="submitBtn">Submit Consolidation Transaction</button>
+    </div>
+
+    <div class="status" id="statusBox"></div>
+</div>
+
+<script>
+    const LUKSO_CHAIN_ID = 42;
+    const CONSOLIDATION_CONTRACT = "0x0000bbddc7ce488642fb579f8b00f3a590007251";
+    
+    let provider;
+    let signer;
+    let userAddress;
+
+    const connectBtn = document.getElementById('connectBtn');
+    const txForm = document.getElementById('txForm');
+    const submitBtn = document.getElementById('submitBtn');
+    const sourceKeyInput = document.getElementById('sourceKey');
+    const targetKeyInput = document.getElementById('targetKey');
+    const statusBox = document.getElementById('statusBox');
+
+    function showStatus(text, type) {
+        statusBox.className = `status ${type}`;
+        statusBox.innerHTML = text;
+        statusBox.style.display = 'block';
+    }
+
+    connectBtn.addEventListener('click', async () => {
+        if (!window.ethereum) {
+            showStatus("Error: No browser wallet detected. Ensure you are browsing inside MetaMask or a web3 wallet app.", "error");
+            return;
+        }
+
+        try {
+            provider = new ethers.BrowserProvider(window.ethereum);
+            const network = await provider.getNetwork();
+            
+            if (Number(network.chainId) !== LUKSO_CHAIN_ID) {
+                try {
+                    await window.ethereum.request({
+                        method: 'wallet_switchEthereumChain',
+                        params: [{ chainId: '0x' + LUKSO_CHAIN_ID.toString(16) }],
+                    });
+                    provider = new ethers.BrowserProvider(window.ethereum);
+                } catch (switchError) {
+                    showStatus("Please switch your wallet network manually to LUKSO Mainnet (Chain ID: 42).", "error");
+                    return;
+                }
+            }
+
+            signer = await provider.getSigner();
+            userAddress = await signer.getAddress();
+            
+            connectBtn.innerText = `Connected: ${userAddress.slice(0,6)}...${userAddress.slice(-4)}`;
+            connectBtn.disabled = true;
+            txForm.style.display = 'block';
+            showStatus("Wallet connected successfully. Your connected wallet MUST be the withdrawal address for the SOURCE validator.", "info");
+        } catch (err) {
+            showStatus(`Connection failed: ${err.message}`, "error");
+        }
+    });
+
+    submitBtn.addEventListener('click', async () => {
+        let sourceKey = sourceKeyInput.value.trim();
+        let targetKey = targetKeyInput.value.trim();
+        
+        if (sourceKey.startsWith('0x')) sourceKey = sourceKey.slice(2);
+        if (targetKey.startsWith('0x')) targetKey = targetKey.slice(2);
+
+        if (sourceKey.length !== 96 || targetKey.length !== 96) {
+            showStatus(`Invalid Keys. Both keys must be 48-byte BLS keys (96 hex characters long).<br>Source length: ${sourceKey.length}, Target length: ${targetKey.length}`, "error");
+            return;
+        }
+
+        // Concatenates 48-byte source key + 48-byte target key to make the strict 96-byte input
+        const finalCalldata = '0x' + sourceKey.toLowerCase() + targetKey.toLowerCase();
+        showStatus("Preparing consolidation payload... Please confirm the pop-up in your wallet.", "info");
+
+        try {
+            const txRequest = {
+                to: CONSOLIDATION_CONTRACT,
+                data: finalCalldata,
+                value: "0x3e8" // 1,000 Wei fee buffer
+            };
+
+            const txResponse = await signer.sendTransaction(txRequest);
+            
+            showStatus(`Transaction sent! Waiting for block confirmation...<br><br><strong>Hash:</strong> <a href="https://lukso.network{txResponse.hash}" target="_blank" style="color: #fff; text-decoration: underline;">${txResponse.hash}</a>`, "info");
+
+            const receipt = await txResponse.wait(1);
+            showStatus(`<strong>Success!</strong> Merge transaction mined. Your consolidation request has been entered into the protocol queue.`, "success");
+        } catch (err) {
+            showStatus(`Transaction failed: ${err.message || err}`, "error");
+        }
+    });
+</script>
+</body>
+</html>
