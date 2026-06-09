@@ -4,34 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LUKSO Validator Consolidation Tool</title>
-    
-    <!-- EMBEDDED ETHERS.JS V6 -->
-    <script>
-        !function(e,t){"object"==typeof exports&&"undefined"!=typeof module?t(exports):"function"==typeof define&&define.amd?define(["exports"],t):t((e="undefined"!=typeof globalThis?globalThis:e||self).ethers={})}(this,(function(e){"use strict";
-        window.ethers=window.ethers||{};
-    </script>
-    <script src="https://cloudflare.com" crossorigin="anonymous"></script>
-    <script>
-        if(typeof ethers==="undefined"||!ethers.BrowserProvider){
-            window.ethers={
-                BrowserProvider: function(ethereum) {
-                    this.ethereum = ethereum;
-                    this.getNetwork = async () => { const id = await ethereum.request({method:'eth_chainId'}); return {chainId: BigInt(id)}; };
-                    this.getSigner = async () => {
-                        const accounts = await ethereum.request({method:'eth_requestAccounts'});
-                        return {
-                            getAddress: async () => accounts,
-                            sendTransaction: async (tx) => {
-                                const txHash = await ethereum.request({method:'eth_sendTransaction', params:[{from: accounts, to: tx.to, data: tx.data, value: tx.value || '0x0'}]});
-                                return { hash: txHash, wait: async () => { return { blockNumber: "Mined" }; } };
-                            }
-                        };
-                    };
-                }
-            };
-        }
-    </script>
-
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 2rem; max-width: 600px; margin: 0 auto; }
         .card { background: #1e293b; border-radius: 12px; padding: 2rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); border: 1px solid #334155; }
@@ -77,9 +49,7 @@
     const LUKSO_CHAIN_ID = 42;
     const CONSOLIDATION_CONTRACT = "0x0000bbddc7ce488642fb579f8b00f3a590007251";
     
-    let provider;
-    let signer;
-    let userAddress;
+    let userAddress = null;
 
     const connectBtn = document.getElementById('connectBtn');
     const txForm = document.getElementById('txForm');
@@ -101,24 +71,24 @@
         }
 
         try {
-            provider = new ethers.BrowserProvider(window.ethereum);
-            const network = await provider.getNetwork();
+            const chainIdHex = await window.ethereum.request({ method: 'eth_chainId' });
+            const currentChainId = parseInt(chainIdHex, 16);
             
-            if (Number(network.chainId) !== LUKSO_CHAIN_ID) {
+            if (currentChainId !== LUKSO_CHAIN_ID) {
                 try {
                     await window.ethereum.request({
                         method: 'wallet_switchEthereumChain',
                         params: [{ chainId: '0x' + LUKSO_CHAIN_ID.toString(16) }],
                     });
-                    provider = new ethers.BrowserProvider(window.ethereum);
                 } catch (switchError) {
                     showStatus("Please switch your wallet network manually to LUKSO Mainnet (Chain ID: 42).", "error");
                     return;
                 }
             }
 
-            signer = await provider.getSigner();
-            userAddress = await signer.getAddress();
+            const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+            // FIXED: Grabs exactly the first item in the account array to stop the doubling bug
+            userAddress = accounts[0]; 
             
             connectBtn.innerText = `Connected: ${userAddress.slice(0,6)}...${userAddress.slice(-4)}`;
             connectBtn.disabled = true;
@@ -130,6 +100,11 @@
     });
 
     submitBtn.addEventListener('click', async () => {
+        if (!userAddress) {
+            showStatus("Error: Wallet disconnected. Please refresh and reconnect.", "error");
+            return;
+        }
+
         let sourceKey = sourceKeyInput.value.trim();
         let targetKey = targetKeyInput.value.trim();
         
@@ -141,23 +116,39 @@
             return;
         }
 
-        // Matches the successful transaction structure: Exactly 96 bytes total (48 source + 48 target)
+        // Exact 96-byte payload (48 bytes source + 48 bytes target) without function selector
         const finalCalldata = '0x' + sourceKey.toLowerCase() + targetKey.toLowerCase();
-        showStatus("Preparing consolidation payload... Please confirm the pop-up in your wallet.", "info");
+        showStatus("Preparing consolidation payload... Please confirm the 1 Wei transaction on your Ledger screen.", "info");
 
         try {
-            const txRequest = {
+            const txParams = {
+                from: userAddress,
                 to: CONSOLIDATION_CONTRACT,
                 data: finalCalldata,
-                value: "0x1" // Formatted to exactly 1 Wei to match standard execution rules
+                value: "0x1" // 1 Wei payload format matching successful Ethereum layouts
             };
 
-            const txResponse = await signer.sendTransaction(txRequest);
+            const txHash = await window.ethereum.request({
+                method: 'eth_sendTransaction',
+                params: [txParams]
+            });
             
-            showStatus(`Transaction sent! Waiting for block confirmation...<br><br><strong>Hash:</strong> <a href="https://lukso.network{txResponse.hash}" target="_blank" style="color: #fff; text-decoration: underline;">${txResponse.hash}</a>`, "info");
+            showStatus(`Transaction sent! Waiting for block confirmation...<br><br><strong>Hash:</strong> <a href="https://lukso.network{txHash}" target="_blank" style="color: #fff; text-decoration: underline;">${txHash}</a>`, "info");
 
-            await txResponse.wait(1);
-            showStatus(`<strong>Success!</strong> Merge transaction mined. Your consolidation request has been successfully submitted to the consensus layer queue.`, "success");
+            let txReceipt = null;
+            while (!txReceipt) {
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                txReceipt = await window.ethereum.request({
+                    method: 'eth_getTransactionReceipt',
+                    params: [txHash]
+                });
+            }
+
+            if (txReceipt.status === "0x1" || txReceipt.status === true) {
+                showStatus(`<strong>Success!</strong> Merge transaction mined. Your consolidation request has been successfully submitted to the consensus layer queue.`, "success");
+            } else {
+                showStatus(`Transaction was mined but reverted on execution layer. Check your gas parameters.`, "error");
+            }
         } catch (err) {
             showStatus(`Transaction rejected or failed: ${err.message}`, "error");
         }
