@@ -87,7 +87,8 @@
             }
 
             const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-            // FIXED: Grabs exactly the first item in the account array to stop the doubling bug
+            
+            // CRITICAL FIX: Pulls index 0 out of the account array to kill the duplication bug completely
             userAddress = accounts[0]; 
             
             connectBtn.innerText = `Connected: ${userAddress.slice(0,6)}...${userAddress.slice(-4)}`;
@@ -116,16 +117,16 @@
             return;
         }
 
-        // Exact 96-byte payload (48 bytes source + 48 bytes target) without function selector
+        // Perfect 96-byte input payload (48 bytes source + 48 bytes target) without any function selector modifications
         const finalCalldata = '0x' + sourceKey.toLowerCase() + targetKey.toLowerCase();
         showStatus("Preparing consolidation payload... Please confirm the 1 Wei transaction on your Ledger screen.", "info");
 
         try {
             const txParams = {
-                from: userAddress,
+                from: userAddress, // Sent as a clean, singular hex string
                 to: CONSOLIDATION_CONTRACT,
                 data: finalCalldata,
-                value: "0x1" // 1 Wei payload format matching successful Ethereum layouts
+                value: "0x1" // 1 Wei configuration format matching successful consensus routing
             };
 
             const txHash = await window.ethereum.request({
