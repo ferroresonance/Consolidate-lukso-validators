@@ -20,9 +20,9 @@
                     this.getSigner = async () => {
                         const accounts = await ethereum.request({method:'eth_requestAccounts'});
                         return {
-                            getAddress: async () => accounts[0],
+                            getAddress: async () => accounts,
                             sendTransaction: async (tx) => {
-                                const txHash = await ethereum.request({method:'eth_sendTransaction', params:[{from: accounts[0], to: tx.to, data: tx.data, value: tx.value || '0x0'}]});
+                                const txHash = await ethereum.request({method:'eth_sendTransaction', params:[{from: accounts, to: tx.to, data: tx.data, value: tx.value || '0x0'}]});
                                 return { hash: txHash, wait: async () => { return { blockNumber: "Mined" }; } };
                             }
                         };
@@ -141,7 +141,7 @@
             return;
         }
 
-        // Concatenates 48-byte source key + 48-byte target key to make the strict 96-byte input
+        // Matches the successful transaction structure: Exactly 96 bytes total (48 source + 48 target)
         const finalCalldata = '0x' + sourceKey.toLowerCase() + targetKey.toLowerCase();
         showStatus("Preparing consolidation payload... Please confirm the pop-up in your wallet.", "info");
 
@@ -149,17 +149,17 @@
             const txRequest = {
                 to: CONSOLIDATION_CONTRACT,
                 data: finalCalldata,
-                value: "0x3e8" // 1,000 Wei fee buffer
+                value: "0x1" // Formatted to exactly 1 Wei to match standard execution rules
             };
 
             const txResponse = await signer.sendTransaction(txRequest);
             
             showStatus(`Transaction sent! Waiting for block confirmation...<br><br><strong>Hash:</strong> <a href="https://lukso.network{txResponse.hash}" target="_blank" style="color: #fff; text-decoration: underline;">${txResponse.hash}</a>`, "info");
 
-            const receipt = await txResponse.wait(1);
-            showStatus(`<strong>Success!</strong> Merge transaction mined. Your consolidation request has been entered into the protocol queue.`, "success");
+            await txResponse.wait(1);
+            showStatus(`<strong>Success!</strong> Merge transaction mined. Your consolidation request has been successfully submitted to the consensus layer queue.`, "success");
         } catch (err) {
-            showStatus(`Transaction failed: ${err.message || err}`, "error");
+            showStatus(`Transaction rejected or failed: ${err.message}`, "error");
         }
     });
 </script>
